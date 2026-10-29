@@ -16,6 +16,7 @@ import { notificationsPage } from './pages/notifications.js';
 import { settingsPage } from './pages/settings.js';
 import { legalPage, LEGAL_TITLES, footerLinks } from './pages/legal.js';
 import { showCookieNotice } from './notice.js';
+import { initServiceWorker, sendBrowserNotification, getNotificationPrefs } from './notifications.js';
 
 const root = document.getElementById('root');
 const NAV = [
@@ -81,6 +82,8 @@ function buildShell() {
   return { app, main, title, bell, sidebarBadge };
 }
 
+const TARGET = { assignment: '/assignments', exam: '/exams', study_session: '/study' };
+
 async function refreshBadge() {
   if (!shell || !state.user) return;
   try {
@@ -90,6 +93,23 @@ async function refreshBadge() {
       badge.textContent = count;
       badge.classList.toggle('hidden', data.unread === 0);
       badge.setAttribute('aria-label', `${data.unread} unread notifications`);
+    }
+
+    // Check recent unread notifications for desktop/mobile browser alerts
+    const prefs = getNotificationPrefs();
+    if (prefs.enabled && (prefs.reminders || prefs.alarms)) {
+      try {
+        const notifRes = await get('/notifications?pageSize=5&unread=true');
+        for (const item of notifRes?.data || []) {
+          const isAlarm = item.type === 'study_reminder';
+          const cat = isAlarm ? 'alarms' : 'reminders';
+          sendBrowserNotification(item.title, {
+            body: item.body,
+            tag: `srv_${item.id}`,
+            url: TARGET[item.entityType] ? `#${TARGET[item.entityType]}` : '#/notifications',
+          }, cat);
+        }
+      } catch { /* best effort */ }
     }
   } catch { /* badge is best-effort */ }
 }
@@ -146,5 +166,7 @@ async function boot() {
     try { await get('/auth/session'); }
     catch (err) { if (err.status === 401 && state.user) { endSession(); router.replace('/login'); } }
   });
+  // Initialize service worker for notifications if supported
+  initServiceWorker();
 }
 boot();

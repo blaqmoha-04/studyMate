@@ -1,9 +1,17 @@
 import { h, mount, icon } from '../dom.js';
 import { post, patch, del, setCsrf, bus } from '../api.js';
 import { state, setUser, applyTheme, applyAccent, onUserChange } from '../store.js';
-import { field, input, select, textarea, clearErrors, showErrors, setBusy, toast, toastError, openModal } from '../ui.js';
+import { field, input, select, textarea, clearErrors, showErrors, setBusy, toast, toastError, openModal, badge } from '../ui.js';
 import { DAYS } from '../time.js';
 import { navigate } from '../router.js';
+import {
+  getNotificationPrefs,
+  saveNotificationPrefs,
+  getPermissionState,
+  requestNotificationPermission,
+  sendBrowserNotification,
+  isNotificationSupported,
+} from '../notifications.js';
 const themeChoices = [
   ['light', 'Light', 'sun', 'A bright, clear workspace'],
   ['dark', 'Dark', 'moon', 'Easy on the eyes'],
@@ -238,24 +246,125 @@ export function settingsPage(container) {
     } catch { /* theme already applied locally; will sync on next form save */ }
   });
 
-  const notificationCheckbox = (label, key) => {
-    const checkbox = h('input', { type: 'checkbox', checked: u.notifications[key] });
+  const notificationCheckbox = (label, checked) => {
+    const checkbox = h('input', { type: 'checkbox', checked });
     return [checkbox, h('label', { class: 'check settings-notification-option' },
       checkbox, h('span', { class: 'settings-checkmark' }, icon('check')),
       h('span', {}, label),
     )];
   };
-  const [deadlinesCheckbox, deadlinesLabel] = notificationCheckbox('Assignment deadlines and overdue work', 'deadlines');
-  const [examsCheckbox, examsLabel] = notificationCheckbox('Upcoming exams', 'exams');
-  const [studyCheckbox, studyLabel] = notificationCheckbox('Planned study sessions', 'study');
+
+  const clientPrefs = getNotificationPrefs();
+  const currentPerm = getPermissionState();
+
+  const [browserMasterCheckbox, browserMasterLabel] = notificationCheckbox('Enable browser notifications', clientPrefs.enabled);
+  const [timerCheckbox, timerLabel] = notificationCheckbox('Timer completion (focus sessions & breaks)', clientPrefs.timers);
+  const [alarmCheckbox, alarmLabel] = notificationCheckbox('Class alarms & scheduled study session alarms', clientPrefs.alarms);
+  const [browserRemindersCheckbox, browserRemindersLabel] = notificationCheckbox('Browser reminders for assignments & exams', clientPrefs.reminders);
+  const [soundCheckbox, soundLabel] = notificationCheckbox('Notification sound (audio chime)', clientPrefs.sound);
+
+  const [deadlinesCheckbox, deadlinesLabel] = notificationCheckbox('Assignment deadlines and overdue work', u.notifications.deadlines);
+  const [examsCheckbox, examsLabel] = notificationCheckbox('Upcoming exams', u.notifications.exams);
+  const [studyCheckbox, studyLabel] = notificationCheckbox('Planned study sessions', u.notifications.study);
+
+  const permBadge = () => {
+    const perm = getPermissionState();
+    if (perm === 'granted') return badge('Allowed', 'success');
+    if (perm === 'denied') return badge('Blocked', 'danger');
+    if (perm === 'unsupported') return badge('Unsupported', 'neutral');
+    return badge('Not requested', 'warning');
+  };
+
+  const permStatusContainer = h('div', { class: 'notification-perm-row' },
+    h('span', { class: 'muted small' }, 'Browser Permission Status: '),
+    permBadge(),
+  );
+
+  const permNotice = h('div', { class: 'muted small notification-guide' });
+  const updateNotice = () => {
+    const perm = getPermissionState();
+    if (perm === 'denied') {
+      permNotice.textContent = 'Notifications are blocked in your browser settings. To enable them, click the lock/settings icon next to your browser address bar and set Notifications to "Allow".';
+    } else if (perm === 'unsupported') {
+      permNotice.textContent = 'This browser does not support standard web notifications. Notifications will show as in-app reminders.';
+    } else if (perm === 'default') {
+      permNotice.textContent = 'Click "Enable browser notifications" or "Test Notification" to grant browser permission.';
+    } else {
+      permNotice.textContent = 'Browser notifications are active. Note: Background notifications on mobile devices require keeping StudyMate installed or active.';
+    }
+  };
+  updateNotice();
+
+  const testButton = h('button', {
+    class: 'btn btn-sm btn-ghost',
+    type: 'button',
+    onclick: async () => {
+      if (getPermissionState() === 'default') {
+        const result = await requestNotificationPermission();
+        updateNotice();
+        permStatusContainer.replaceChildren(h('span', { class: 'muted small' }, 'Browser Permission Status: '), permBadge());
+        if (result !== 'granted') {
+          toast('Notification permission was not granted', 'warning');
+          return;
+        }
+      }
+      const sent = await sendBrowserNotification('StudyMate Pro Test Notification', {
+        body: 'Your notification system and sounds are working perfectly!',
+        tag: `test_${Date.now()}`,
+        url: '#/settings',
+      }, 'timers');
+      if (sent) {
+        toast('Test notification sent!', 'success');
+      } else {
+        toast('Notification sound played (browser alerts disabled or blocked)', 'info');
+      }
+    },
+  }, icon('bell'), 'Test Notification');
+
+  browserMasterCheckbox.addEventListener('change', async () => {
+    if (browserMasterCheckbox.checked && getPermissionState() === 'default') {
+      const result = await requestNotificationPermission();
+      updateNotice();
+      permStatusContainer.replaceChildren(h('span', { class: 'muted small' }, 'Browser Permission Status: '), permBadge());
+      if (result !== 'granted') {
+        browserMasterCheckbox.checked = false;
+        toast('Permission was not granted.', 'warning');
+      }
+    }
+  });
+
   const notifications = formCard({
     id: 'notifications',
     title: 'Notifications',
-    description: 'Manage the in-app reminders you want to receive.',
+    description: 'Manage in-app reminders and desktop/mobile browser notifications.',
     iconName: 'bell',
     saveLabel: 'Save Notification Settings',
-    fields: [deadlinesLabel, examsLabel, studyLabel],
+    fields: [
+      permStatusContainer,
+      permNotice,
+      h('hr', { class: 'divider' }),
+      h('h4', { class: 'small bold' }, 'Browser & Device Notifications'),
+      browserMasterLabel,
+      timerLabel,
+      alarmLabel,
+      browserRemindersLabel,
+      soundLabel,
+      h('div', { class: 'mt-2 mb-2' }, testButton),
+      h('hr', { class: 'divider' }),
+      h('h4', { class: 'small bold' }, 'In-App Reminders'),
+      deadlinesLabel,
+      examsLabel,
+      studyLabel,
+    ],
     run: async () => {
+      saveNotificationPrefs({
+        enabled: browserMasterCheckbox.checked,
+        timers: timerCheckbox.checked,
+        alarms: alarmCheckbox.checked,
+        reminders: browserRemindersCheckbox.checked,
+        sound: soundCheckbox.checked,
+      });
+
       const response = await patch('/me/preferences', { notifications: {
         deadlines: deadlinesCheckbox.checked,
         exams: examsCheckbox.checked,

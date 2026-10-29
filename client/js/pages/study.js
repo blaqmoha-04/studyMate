@@ -3,15 +3,26 @@ import { get, post, del, qs, bus } from '../api.js';
 import { loading, errorState, emptyState, badge, pager, confirmDialog, toast, toastError } from '../ui.js';
 import { fmtDateTime, fmtDuration, fmtClock, todayKey, DAYS_SHORT } from '../time.js';
 import { openStudyStartForm, openStudyPlanForm } from '../forms.js';
+import { sendBrowserNotification } from '../notifications.js';
 
 // The server owns the recorded time. The browser only *displays* a ticking clock anchored to the
 // server-reported elapsed seconds, and re-syncs regularly, so closing the tab never loses or invents time.
 export function studyPage(container) {
   let active = null; let anchorAt = 0; let tickTimer; let syncTimer; let breakEnd = null; let histPage = 1;
+  let focusGoalNotified = false;
   const timerBox = h('div', {}); const statsBox = h('div', {}); const planBox = h('div', {}); const histBox = h('div', {});
 
   const elapsedNow = () => (!active ? 0 : active.status === 'running' ? active.elapsedSeconds + (performance.now() - anchorAt) / 1000 : active.elapsedSeconds);
-  const setActive = (s) => { active = s; anchorAt = performance.now(); };
+  const setActive = (s) => {
+    active = s;
+    anchorAt = performance.now();
+    if (s && s.status === 'running') {
+      const goal = s.focusMinutes * 60;
+      focusGoalNotified = s.elapsedSeconds >= goal;
+    } else {
+      focusGoalNotified = false;
+    }
+  };
   async function act(path) { try { const r = await post(path); return r.data; } catch (e) { toastError(e); return null; } }
 
   function renderTimer() {
@@ -45,13 +56,37 @@ export function studyPage(container) {
   }
   function tick() {
     const clock = document.getElementById('clock'); const brk = document.getElementById('break-clock');
-    if (brk && breakEnd) { const left = (breakEnd - Date.now()) / 1000; if (left <= 0) { breakEnd = null; toast('Break over — ready for the next session?', 'success'); renderTimer(); } else brk.textContent = fmtClock(left); return; }
+    if (brk && breakEnd) {
+      const left = (breakEnd - Date.now()) / 1000;
+      if (left <= 0) {
+        breakEnd = null;
+        sendBrowserNotification('Break completed!', {
+          body: 'Ready for your next study session?',
+          tag: 'timer_break_finished',
+          url: '#/study',
+        }, 'timers');
+        toast('Break over — ready for the next session?', 'success');
+        renderTimer();
+      } else {
+        brk.textContent = fmtClock(left);
+      }
+      return;
+    }
     if (!clock || !active) return;
     const goal = active.focusMinutes * 60; const el = elapsedNow(); const left = goal - el;
     clock.textContent = left >= 0 ? fmtClock(left) : `+${fmtClock(-left)}`;
     document.getElementById('clock-sub').textContent = left >= 0 ? `${fmtClock(el)} studied of ${active.focusMinutes} min` : 'Focus goal reached — complete the session or keep going.';
     const pct = Math.min(100, Math.round((el / goal) * 100)); const bar = document.getElementById('bar'); bar.style.width = `${pct}%`; bar.parentElement.setAttribute('aria-valuenow', String(pct));
     document.title = `${clock.textContent} · StudyMate`;
+
+    if (left <= 0 && !focusGoalNotified && active.status === 'running') {
+      focusGoalNotified = true;
+      sendBrowserNotification('Focus goal reached!', {
+        body: `You completed your ${active.focusMinutes} minute session${active.subject ? ` for ${active.subject}` : ''}. Take a break or keep going!`,
+        tag: `timer_goal_${active.id}`,
+        url: '#/study',
+      }, 'timers');
+    }
   }
   async function sync() { try { const { data } = await get('/study-sessions/active'); if (!data && !active) return; if (!data || data.id !== active?.id || data.status !== active?.status) { setActive(data); renderTimer(); } else setActive(data); } catch { /* keep ticking locally */ } }
 

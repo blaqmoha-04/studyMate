@@ -30,6 +30,6 @@ export function notificationsPage(container) {
   }
   mount(container, h('div', { class: 'page-head' }, h('h2', {}, 'Notifications'), h('div', { class: 'actions' }, filter,
     h('button', { class: 'btn', type: 'button', onclick: () => act(() => post('/notifications/read-all')) }, 'Mark all read'))),
-    h('p', { class: 'muted small' }, 'Reminders are created while the server is running and appear here when you open StudyMate. There are no browser push notifications.'), box);
+    h('p', { class: 'muted small' }, 'Reminders for deadlines, overdue work, classes, and study sessions appear here. You can also customize browser and device notifications under Settings.'), box);
   load();
 }
