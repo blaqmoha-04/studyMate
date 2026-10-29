@@ -9,7 +9,7 @@ if (typeof dns.setDefaultResultOrder === 'function') {
   dns.setDefaultResultOrder('ipv4first');
 }
 if (typeof net.setDefaultAutoSelectFamily === 'function') {
-  net.setDefaultAutoSelectFamily(false);
+  net.setDefaultAutoSelectFamily(true);
 }
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';

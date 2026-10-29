@@ -14,7 +14,7 @@ if (typeof dns.setDefaultResultOrder === 'function') {
   dns.setDefaultResultOrder('ipv4first');
 }
 if (typeof net.setDefaultAutoSelectFamily === 'function') {
-  net.setDefaultAutoSelectFamily(false);
+  net.setDefaultAutoSelectFamily(true);
 }
 
 const DEFAULT_BASE_URL = 'https://api.dictionaryapi.dev/api/v2/entries/en';

@@ -11,16 +11,38 @@ export function dictionaryPage(container) {
   const vocabBox = h('div', {});
 
   let currentAudio = null;
-  function playAudio(url) {
-    if (!url) return;
+  function speakFallback(word) {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.SpeechSynthesisUtterance) {
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(word);
+        utter.lang = 'en-US';
+        window.speechSynthesis.speak(utter);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  function playAudio(url, word) {
+    if (!url) {
+      if (word && speakFallback(word)) return;
+      return;
+    }
     try {
       if (currentAudio) {
         currentAudio.pause();
         currentAudio = null;
       }
       currentAudio = new Audio(`/api/v1/dictionary/audio?url=${encodeURIComponent(url)}`);
-      currentAudio.play().catch((err) => toastError(err, 'Could not play audio.'));
+      currentAudio.play().catch((err) => {
+        if (word && speakFallback(word)) return;
+        toastError(err, 'Could not play audio.');
+      });
     } catch (err) {
+      if (word && speakFallback(word)) return;
       toastError(err, 'Could not play audio.');
     }
   }
@@ -100,11 +122,11 @@ export function dictionaryPage(container) {
         h('div', { class: 'dict-word-title' },
           entry.word,
           isDaily ? badge('Word of the Day', 'primary') : null,
-          entry.audioUrl ? h('button', {
+          (entry.audioUrl || ('speechSynthesis' in window)) ? h('button', {
             class: 'btn btn-ghost btn-sm btn-icon',
             type: 'button',
             'aria-label': `Listen to pronunciation of ${entry.word}`,
-            onclick: () => playAudio(entry.audioUrl),
+            onclick: () => playAudio(entry.audioUrl, entry.word),
           }, icon('volume')) : null,
         ),
         entry.phonetic ? h('div', { class: 'dict-phonetic' }, entry.phonetic) : null,
