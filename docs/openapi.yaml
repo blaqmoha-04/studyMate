@@ -1,0 +1,448 @@
+openapi: 3.0.3
+info:
+  title: StudyMate API
+  version: 1.0.0
+  description: |
+    REST API for StudyMate, a self-hosted student planner. Base path: `/api/v1`.
+
+    **Authentication**: a session cookie (`sm_sid`, HttpOnly) is set by `/auth/login` or `/auth/register`.
+    **CSRF**: every state-changing request (POST/PATCH/PUT/DELETE) made with a session must send the header
+    `X-CSRF-Token` (the `csrfToken` returned by login/register/`/auth/session`) and `Content-Type: application/json`.
+
+    **Responses**: success `{ "data": ..., "meta": ... }`; errors `{ "error": { "code", "message", "details?", "requestId" } }`.
+    A record that belongs to another user is reported as `404`, never `403`, so existence is not revealed.
+    Timestamps are ISO 8601 (UTC). Collections are paginated with `page` and `pageSize` (max 100).
+servers:
+  - url: /api/v1
+security:
+  - cookieAuth: []
+    csrfToken: []
+components:
+  securitySchemes:
+    cookieAuth: { type: apiKey, in: cookie, name: sm_sid }
+    csrfToken: { type: apiKey, in: header, name: X-CSRF-Token, description: Required on state-changing requests. }
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    PageSize: { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+  responses:
+    Unauthorized: { description: Not signed in or session expired, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Not found (or belongs to another user), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Invalid: { description: Validation error (code validation_error, details lists fields), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: Missing/invalid CSRF token or cross-origin request, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: Conflict with current state, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    TooMany: { description: Rate limited, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Unavailable: { description: Database temporarily unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NoContent: { description: Done, no body }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: validation_error }
+            message: { type: string }
+            details: { type: array, items: { type: object, properties: { field: { type: string }, message: { type: string } } } }
+            requestId: { type: string }
+    PageMeta:
+      type: object
+      properties: { page: { type: integer }, pageSize: { type: integer }, total: { type: integer }, totalPages: { type: integer } }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        theme: { type: string, enum: [light, dark, system] }
+        learningGoal: { type: string, maxLength: 500, description: Optional, visible only to the user. }
+        timezone: { type: string, example: Africa/Accra }
+        weekStart: { type: integer, minimum: 0, maximum: 6, description: 0 = Sunday }
+        notifications: { type: object, properties: { deadlines: { type: boolean }, exams: { type: boolean }, study: { type: boolean } } }
+        createdAt: { type: string, format: date-time }
+    Assignment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        subject: { type: string }
+        priority: { type: string, enum: [low, medium, high, urgent] }
+        status: { type: string, enum: [todo, in_progress, completed] }
+        dueAt: { type: string, format: date-time }
+        estimatedMinutes: { type: integer, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true, description: Set exactly when status is completed. }
+        isOverdue: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AssignmentInput:
+      type: object
+      required: [title, dueAt]
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 5000 }
+        subject: { type: string, maxLength: 100 }
+        priority: { type: string, enum: [low, medium, high, urgent] }
+        status: { type: string, enum: [todo, in_progress, completed] }
+        dueAt: { type: string, format: date-time, description: ISO 8601 with time zone, year 2000-2100. }
+        estimatedMinutes: { type: integer, minimum: 1, maximum: 10080, nullable: true }
+    Class:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        subject: { type: string }
+        lecturer: { type: string }
+        location: { type: string }
+        dayOfWeek: { type: integer, minimum: 0, maximum: 6 }
+        startTime: { type: string, example: '09:00' }
+        endTime: { type: string, example: '10:30' }
+        color: { type: string, example: '#2563eb' }
+        hasConflict: { type: boolean, description: Only in the list response. }
+    ClassInput:
+      type: object
+      required: [subject, dayOfWeek, startTime, endTime]
+      additionalProperties: false
+      properties:
+        subject: { type: string, maxLength: 100 }
+        lecturer: { type: string, maxLength: 100 }
+        location: { type: string, maxLength: 100 }
+        dayOfWeek: { type: integer, minimum: 0, maximum: 6 }
+        startTime: { type: string, pattern: '^([01]\d|2[0-3]):[0-5]\d$' }
+        endTime: { type: string, pattern: '^([01]\d|2[0-3]):[0-5]\d$', description: Must be after startTime. }
+        color: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+    Note:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        subject: { type: string }
+        content: { type: string, description: Plain text. Clients must render it as text, never as HTML. }
+        preview: { type: string, description: First 200 characters (list responses only, replaces content). }
+        tags: { type: array, items: { type: string } }
+        pinned: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    NoteInput:
+      type: object
+      required: [title]
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 200 }
+        subject: { type: string, maxLength: 100 }
+        content: { type: string, maxLength: 100000 }
+        tags: { type: array, maxItems: 20, items: { type: string, maxLength: 30 } }
+        pinned: { type: boolean }
+    Exam:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        subject: { type: string }
+        title: { type: string }
+        examAt: { type: string, format: date-time }
+        venue: { type: string }
+        notes: { type: string }
+        secondsUntil: { type: integer, description: Negative for past exams. }
+    ExamInput:
+      type: object
+      required: [subject, title, examAt]
+      additionalProperties: false
+      properties:
+        subject: { type: string, maxLength: 100 }
+        title: { type: string, maxLength: 200 }
+        examAt: { type: string, format: date-time }
+        venue: { type: string, maxLength: 200 }
+        notes: { type: string, maxLength: 5000 }
+    StudySession:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [planned, running, paused, completed, cancelled] }
+        subject: { type: string }
+        assignmentId: { type: string, format: uuid, nullable: true }
+        examId: { type: string, format: uuid, nullable: true }
+        plannedStart: { type: string, format: date-time, nullable: true }
+        plannedMinutes: { type: integer, nullable: true }
+        focusMinutes: { type: integer }
+        breakMinutes: { type: integer }
+        startedAt: { type: string, format: date-time, nullable: true }
+        endedAt: { type: string, format: date-time, nullable: true }
+        elapsedSeconds: { type: integer, description: Computed on the server from its own clock. }
+        actualSeconds: { type: integer, nullable: true, description: Recorded time (capped at 12 hours). }
+        serverTime: { type: string, format: date-time }
+    Notification:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [assignment_due, assignment_overdue, exam_upcoming, study_reminder] }
+        title: { type: string }
+        body: { type: string }
+        entityType: { type: string, nullable: true }
+        entityId: { type: string, format: uuid, nullable: true }
+        readAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    CalendarEvent:
+      type: object
+      properties:
+        id: { type: string }
+        entityId: { type: string, format: uuid }
+        type: { type: string, enum: [assignment, class, exam, study] }
+        title: { type: string }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time, nullable: true }
+        color: { type: string }
+        meta: { type: object }
+  requestBodies:
+    Json: { required: true, content: { application/json: { schema: { type: object } } } }
+paths:
+  /health/live:
+    get: { tags: [Health], summary: Process is up, security: [], responses: { '200': { description: ok } } }
+  /health/ready:
+    get: { tags: [Health], summary: Process is up and the database answers, security: [], responses: { '200': { description: ready }, '503': { $ref: '#/components/responses/Unavailable' } } }
+  /legal:
+    get: { tags: [Legal], summary: "Operator details and retention periods used by the Privacy Policy, Terms and Cookie Policy pages", security: [], responses: { '200': { description: '{ data: { version, configured, operator: { name, address, email, jurisdiction, processors }, retention: { sessionDays, backupDays } }' } } }
+  /auth/capabilities:
+    get: { tags: [Auth], summary: What this server can do (e.g. email password resets), security: [], responses: { '200': { description: '{ data: { passwordResetEmail, devResetLogging } }' } } }
+  /auth/session:
+    get: { tags: [Auth], summary: Current user and CSRF token, responses: { '200': { description: '{ data: { user, csrfToken } }' }, '401': { $ref: '#/components/responses/Unauthorized' } } }
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Create an account and sign in
+      security: []
+      description: The user must explicitly accept the Terms of Service and Privacy Policy. The server stores when and which policy version was accepted. No age confirmation is required.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, name, password, acceptTerms], additionalProperties: false, properties: { email: { type: string }, name: { type: string }, password: { type: string, minLength: 10, maxLength: 128 }, timezone: { type: string }, acceptTerms: { type: boolean, enum: [true], description: User accepts the Terms of Service and has read the Privacy Policy. } } } } } }
+      responses: { '201': { description: Created; sets session cookie }, '400': { $ref: '#/components/responses/Invalid' }, '409': { $ref: '#/components/responses/Conflict' }, '429': { $ref: '#/components/responses/TooMany' } }
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Sign in (same generic error for unknown email and wrong password)
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string }, password: { type: string } } } } } }
+      responses: { '200': { description: Signed in; sets session cookie }, '401': { $ref: '#/components/responses/Unauthorized' }, '429': { $ref: '#/components/responses/TooMany' } }
+  /auth/logout:
+    post: { tags: [Auth], summary: Sign out and invalidate the session server-side, responses: { '204': { $ref: '#/components/responses/NoContent' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } } }
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request a password-reset link
+      description: Returns 501 `email_not_configured` when the server has no SMTP (it never pretends to send). Otherwise 202 with an identical response whether or not the account exists.
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string } } } } } }
+      responses: { '202': { description: Accepted }, '501': { description: Email not configured }, '429': { $ref: '#/components/responses/TooMany' } }
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Set a new password with a one-time token (expires after 1 hour, single use, revokes all sessions)
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [token, password], properties: { token: { type: string }, password: { type: string } } } } } }
+      responses: { '200': { description: Password updated }, '400': { $ref: '#/components/responses/Invalid' }, '429': { $ref: '#/components/responses/TooMany' } }
+  /auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change password; signs out all other devices
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [currentPassword, newPassword], properties: { currentPassword: { type: string }, newPassword: { type: string } } } } } }
+      responses: { '200': { description: Changed }, '400': { $ref: '#/components/responses/Invalid' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /me:
+    get: { tags: [Account], summary: Current profile, responses: { '200': { description: '{ data: User + csrfToken }' }, '401': { $ref: '#/components/responses/Unauthorized' } } }
+    patch:
+      tags: [Account]
+      summary: Update name, learningGoal and/or email (changing email needs currentPassword)
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses: { '200': { description: Updated }, '400': { $ref: '#/components/responses/Invalid' }, '409': { $ref: '#/components/responses/Conflict' } }
+    delete:
+      tags: [Account]
+      summary: Permanently delete the account and ALL its data (body must contain password and confirm "DELETE")
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses: { '204': { $ref: '#/components/responses/NoContent' }, '400': { $ref: '#/components/responses/Invalid' } }
+  /me/reset-progress:
+    post:
+      tags: [Account]
+      summary: Delete completed assignments, completed/cancelled study sessions and all notifications. Keeps the account, timetable, notes, exams, open assignments and planned sessions. Body must contain password and confirm "RESET".
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses: { '200': { description: '{ data: { completedAssignmentsDeleted, studySessionsDeleted, notificationsDeleted } }' }, '400': { $ref: '#/components/responses/Invalid' } }
+  /me/preferences:
+    patch: { tags: [Account], summary: 'Update theme, timezone, weekStart, notifications', requestBody: { $ref: '#/components/requestBodies/Json' }, responses: { '200': { description: Updated }, '400': { $ref: '#/components/responses/Invalid' } } }
+  /me/export:
+    get: { tags: [Account], summary: Download all of your data as JSON (no password hashes or tokens), responses: { '200': { description: JSON attachment } } }
+  /dashboard:
+    get: { tags: [Dashboard], summary: Counts and lists computed from your records, responses: { '200': { description: Dashboard summary } } }
+  /calendar/events:
+    get:
+      tags: [Calendar]
+      summary: Events in a local date range (weekly classes are expanded per day)
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date }, description: Inclusive; range max 93 days. }
+        - { name: types, in: query, schema: { type: string, example: 'assignment,exam' } }
+      responses: { '200': { description: Array of CalendarEvent }, '400': { $ref: '#/components/responses/Invalid' } }
+  /assignments:
+    get:
+      tags: [Assignments]
+      summary: List with filters, search, sorting and pagination
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: status, in: query, schema: { type: string, enum: [todo, in_progress, completed] } }
+        - { name: priority, in: query, schema: { type: string, enum: [low, medium, high, urgent] } }
+        - { name: subject, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: overdue, in: query, schema: { type: boolean } }
+        - { name: dueFrom, in: query, schema: { type: string, format: date-time } }
+        - { name: dueTo, in: query, schema: { type: string, format: date-time } }
+        - { name: sort, in: query, schema: { type: string, enum: [due, priority, created], default: due } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+      responses: { '200': { description: '{ data: Assignment[], meta: PageMeta }' }, '400': { $ref: '#/components/responses/Invalid' } }
+    post: { tags: [Assignments], summary: Create, requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AssignmentInput' } } } }, responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Invalid' } } }
+  /assignments/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { tags: [Assignments], summary: Get one, responses: { '200': { description: Assignment }, '404': { $ref: '#/components/responses/NotFound' } } }
+    patch: { tags: [Assignments], summary: Update (partial), requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { '200': { description: Updated }, '400': { $ref: '#/components/responses/Invalid' }, '404': { $ref: '#/components/responses/NotFound' } } }
+    delete: { tags: [Assignments], summary: Delete, responses: { '204': { $ref: '#/components/responses/NoContent' }, '404': { $ref: '#/components/responses/NotFound' } } }
+  /assignments/{id}/complete:
+    post: { tags: [Assignments], summary: Mark completed, parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: Updated }, '404': { $ref: '#/components/responses/NotFound' } } }
+  /classes:
+    get: { tags: [Classes], summary: Weekly timetable (flags overlapping classes; meta.conflicts lists id pairs), responses: { '200': { description: '{ data: Class[], meta: { conflicts } }' } } }
+    post: { tags: [Classes], summary: Create (meta.warnings lists overlapping classes), requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ClassInput' } } } }, responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Invalid' } } }
+  /classes/today:
+    get: { tags: [Classes], summary: "Today's classes in the user's time zone", responses: { '200': { description: 'Class[]' } } }
+  /classes/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { tags: [Classes], summary: Get one, responses: { '200': { description: Class }, '404': { $ref: '#/components/responses/NotFound' } } }
+    patch: { tags: [Classes], summary: Update (partial), requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { '200': { description: Updated }, '400': { $ref: '#/components/responses/Invalid' }, '404': { $ref: '#/components/responses/NotFound' } } }
+    delete: { tags: [Classes], summary: Delete, responses: { '204': { $ref: '#/components/responses/NoContent' }, '404': { $ref: '#/components/responses/NotFound' } } }
+  /notes:
+    get:
+      tags: [Notes]
+      summary: List (pinned first) with search and filters
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: subject, in: query, schema: { type: string } }
+        - { name: tag, in: query, schema: { type: string } }
+        - { name: pinned, in: query, schema: { type: boolean } }
+      responses: { '200': { description: '{ data: Note[] (with preview), meta: PageMeta }' } }
+    post: { tags: [Notes], summary: Create, requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NoteInput' } } } }, responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Invalid' } } }
+  /notes/meta:
+    get: { tags: [Notes], summary: Your subjects and tags (for filters), responses: { '200': { description: '{ data: { subjects, tags } }' } } }
+  /notes/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { tags: [Notes], summary: Get one with full content, responses: { '200': { description: Note }, '404': { $ref: '#/components/responses/NotFound' } } }
+    patch:
+      tags: [Notes]
+      summary: Update (autosave). Send baseUpdatedAt to detect edits made elsewhere.
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses: { '200': { description: Updated }, '404': { $ref: '#/components/responses/NotFound' }, '409': { description: Stale baseUpdatedAt; error.details.current has the latest note } }
+    delete: { tags: [Notes], summary: Delete, responses: { '204': { $ref: '#/components/responses/NoContent' }, '404': { $ref: '#/components/responses/NotFound' } } }
+  /exams:
+    get:
+      tags: [Exams]
+      summary: List upcoming (default), past or all
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: when, in: query, schema: { type: string, enum: [upcoming, past, all], default: upcoming } }
+        - { name: subject, in: query, schema: { type: string } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
+      responses: { '200': { description: '{ data: Exam[], meta: PageMeta }' } }
+    post: { tags: [Exams], summary: Create, requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExamInput' } } } }, responses: { '201': { description: Created }, '400': { $ref: '#/components/responses/Invalid' } } }
+  /exams/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { tags: [Exams], summary: Get one with its linked study plan and logged study time, responses: { '200': { description: Exam }, '404': { $ref: '#/components/responses/NotFound' } } }
+    patch: { tags: [Exams], summary: Update (partial), requestBody: { required: true, content: { application/json: { schema: { type: object } } } }, responses: { '200': { description: Updated }, '404': { $ref: '#/components/responses/NotFound' } } }
+    delete: { tags: [Exams], summary: Delete (linked study sessions are kept, unlinked), responses: { '204': { $ref: '#/components/responses/NoContent' }, '404': { $ref: '#/components/responses/NotFound' } } }
+  /study-sessions:
+    get:
+      tags: [Study]
+      summary: List sessions (history / plan)
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: status, in: query, schema: { type: string, enum: [planned, running, paused, completed, cancelled] } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses: { '200': { description: '{ data: StudySession[], meta: PageMeta }' } }
+  /study-sessions/active:
+    get: { tags: [Study], summary: The running or paused session, or null, responses: { '200': { description: '{ data: StudySession | null }' } } }
+  /study-sessions/stats:
+    get: { tags: [Study], summary: "Today / this week / per-day / per-subject totals in the user's time zone", responses: { '200': { description: Stats } } }
+  /study-sessions/plan:
+    post: { tags: [Study], summary: Plan a future study block (optionally linked to an assignment or exam you own), requestBody: { $ref: '#/components/requestBodies/Json' }, responses: { '201': { description: Planned }, '400': { $ref: '#/components/responses/Invalid' } } }
+  /study-sessions/start:
+    post: { tags: [Study], summary: Start a focus session (or start a planned one via fromPlannedId). Only one active session per user., requestBody: { $ref: '#/components/requestBodies/Json' }, responses: { '201': { description: Running }, '409': { $ref: '#/components/responses/Conflict' } } }
+  /study-sessions/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { tags: [Study], summary: Get one, responses: { '200': { description: StudySession }, '404': { $ref: '#/components/responses/NotFound' } } }
+    patch: { tags: [Study], summary: Edit a planned session, requestBody: { $ref: '#/components/requestBodies/Json' }, responses: { '200': { description: Updated }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } } }
+    delete: { tags: [Study], summary: Delete (not while running or paused), responses: { '204': { $ref: '#/components/responses/NoContent' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' } } }
+  /study-sessions/{id}/pause:
+    post: { tags: [Study], summary: Pause a running session, parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: Paused }, '409': { $ref: '#/components/responses/Conflict' } } }
+  /study-sessions/{id}/resume:
+    post: { tags: [Study], summary: Resume a paused session, parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: Running }, '409': { $ref: '#/components/responses/Conflict' } } }
+  /study-sessions/{id}/complete:
+    post: { tags: [Study], summary: Complete and record server-computed time, parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: Completed }, '409': { $ref: '#/components/responses/Conflict' } } }
+  /study-sessions/{id}/cancel:
+    post: { tags: [Study], summary: Cancel without recording time, parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: Cancelled }, '409': { $ref: '#/components/responses/Conflict' } } }
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: List in-app notifications (generates any new reminders first; no duplicates)
+      parameters: [ { $ref: '#/components/parameters/Page' }, { $ref: '#/components/parameters/PageSize' }, { name: unread, in: query, schema: { type: boolean } } ]
+      responses: { '200': { description: '{ data: Notification[], meta: PageMeta + unread }' } }
+  /notifications/unread-count:
+    get: { tags: [Notifications], summary: Unread badge count, responses: { '200': { description: '{ data: { unread } }' } } }
+  /notifications/read-all:
+    post: { tags: [Notifications], summary: Mark all read, responses: { '200': { description: '{ data: { updated } }' } } }
+  /notifications/{id}/read:
+    post: { tags: [Notifications], summary: Mark one read, parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: Updated }, '404': { $ref: '#/components/responses/NotFound' } } }
+  /notifications/{id}:
+    delete: { tags: [Notifications], summary: Dismiss, parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '204': { $ref: '#/components/responses/NoContent' }, '404': { $ref: '#/components/responses/NotFound' } } }
+  /dictionary/lookup:
+    get:
+      tags: [Dictionary]
+      summary: Look up a word definition and phonetics
+      parameters:
+        - { name: word, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: '{ data: Entry }' }, '400': { $ref: '#/components/responses/Invalid' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /dictionary/daily:
+    get:
+      tags: [Dictionary]
+      summary: Get the Word of the Day
+      responses: { '200': { description: '{ data: Entry }' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /dictionary/audio:
+    get:
+      tags: [Dictionary]
+      summary: Stream pronunciation audio
+      parameters:
+        - { name: url, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Audio stream }, '400': { $ref: '#/components/responses/Invalid' } }
+  /dictionary/vocabulary:
+    get:
+      tags: [Dictionary]
+      summary: List saved vocabulary words
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: q, in: query, schema: { type: string } }
+      responses: { '200': { description: '{ data: Vocabulary[], meta: PageMeta }' } }
+    post:
+      tags: [Dictionary]
+      summary: Save a word to vocabulary
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses: { '201': { description: Saved }, '400': { $ref: '#/components/responses/Invalid' } }
+  /dictionary/vocabulary/{id}:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    get: { tags: [Dictionary], summary: Get a saved vocabulary word, responses: { '200': { description: Vocabulary }, '404': { $ref: '#/components/responses/NotFound' } } }
+    delete: { tags: [Dictionary], summary: Remove a word from vocabulary, responses: { '204': { $ref: '#/components/responses/NoContent' }, '404': { $ref: '#/components/responses/NotFound' } } }
+  /dictionary/recent:
+    get:
+      tags: [Dictionary]
+      summary: List recent dictionary searches
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses: { '200': { description: '{ data: Search[] }' } }
+    delete:
+      tags: [Dictionary]
+      summary: Clear dictionary search history
+      responses: { '204': { $ref: '#/components/responses/NoContent' } }

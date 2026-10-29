@@ -1,0 +1,41 @@
+{
+  "name": "studymate",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted student planner",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/src/index.js",
+    "dev": "node --watch --env-file=.env server/src/index.js",
+    "migrate": "node --env-file=.env server/scripts/migrate.js",
+    "seed": "node --env-file=.env server/scripts/seed.js",
+    "test": "for f in server/tests/auth.test.js server/tests/resources.test.js server/tests/security.test.js server/tests/openapi.test.js server/tests/a11y.test.js server/tests/frontend.test.js; do node --test --env-file=.env.test \"$f\" || exit 1; done",
+    "audit": "npm audit --omit=dev",
+    "pretest": "node --env-file=.env.test server/scripts/migrate.js",
+    "reset-link": "node --env-file=.env server/scripts/reset-link.js",
+    "migrate:down": "node --env-file=.env server/scripts/migrate.js down",
+    "migrate:status": "node --env-file=.env server/scripts/migrate.js status",
+    "test:api": "for f in server/tests/auth.test.js server/tests/resources.test.js server/tests/security.test.js server/tests/openapi.test.js server/tests/a11y.test.js; do node --test --env-file=.env.test \"$f\" || exit 1; done",
+    "licenses": "node scripts/third-party.mjs"
+  },
+  "dependencies": {
+    "argon2": "^0.45.1",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.22.3",
+    "express-rate-limit": "^8.7.1",
+    "helmet": "^8.3.0",
+    "nodemailer": "^10.2.1",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.3",
+    "supertest": "^7.3.1",
+    "yaml": "^2.9.1"
+  }
+}

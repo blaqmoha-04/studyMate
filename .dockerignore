@@ -1,0 +1,12 @@
+node_modules
+.git
+.env
+.env.*
+!.env.example
+backups
+secrets
+certbot
+server/tests
+docs
+*.md
+**/*:Zone.Identifier

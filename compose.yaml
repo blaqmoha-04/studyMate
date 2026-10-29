@@ -1,0 +1,110 @@
+# StudyMate production stack: db (private) + migrate (one-shot) + app + nginx (+ certbot on demand).
+name: studymate
+
+x-app-env: &app-env
+  NODE_ENV: production
+  PORT: "3000"
+  TRUST_PROXY: ${TRUST_PROXY:-1}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN in .env}
+  SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+  SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+  DB_POOL_MAX: ${DB_POOL_MAX:-10}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-studymate}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-studymate}
+  SMTP_URL: ${SMTP_URL:-}
+  MAIL_FROM: ${MAIL_FROM:-}
+  OPERATOR_NAME: ${OPERATOR_NAME:-}
+  OPERATOR_ADDRESS: ${OPERATOR_ADDRESS:-}
+  OPERATOR_EMAIL: ${OPERATOR_EMAIL:-}
+  OPERATOR_JURISDICTION: ${OPERATOR_JURISDICTION:-}
+  OPERATOR_PROCESSORS: ${OPERATOR_PROCESSORS:-}
+  BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-studymate}
+      POSTGRES_DB: ${POSTGRES_DB:-studymate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data      # persistent: survives restarts and upgrades
+    networks: [backend]                       # internal network only; NO published ports
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    mem_limit: 512m
+    shm_size: 128mb
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 30s
+
+  migrate:                                    # runs once per `up`, exits when migrations are applied
+    build: .
+    image: studymate-app:local
+    command: ["node", "server/scripts/migrate.js"]
+    environment: *app-env
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [backend]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  app:
+    build: .
+    image: studymate-app:local
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      db: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    networks: [backend, frontend]             # reaches the db; reachable by nginx
+    expose: ["3000"]                          # not published to the host at all
+    read_only: true                           # container filesystem is read-only
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 15s
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      NGINX_ENVSUBST_FILTER: "^DOMAIN$$"      # only substitute ${DOMAIN}; leave nginx's own $variables alone
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${NGINX_TEMPLATES_DIR:-./deploy/nginx/templates-http}:/etc/nginx/templates:ro
+      - ./deploy/nginx/proxy_params_studymate:/etc/nginx/proxy_params_studymate:ro
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+    networks: [frontend]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+
+  certbot:                                    # not started by default; used by init-letsencrypt.sh and renewals
+    image: certbot/certbot:latest
+    profiles: ["tools"]
+    volumes:
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
+    networks: [frontend]
+
+networks:
+  backend:
+    internal: true                            # no route to the internet or the host: the database is private
+  frontend: {}
+
+volumes:
+  pgdata:
